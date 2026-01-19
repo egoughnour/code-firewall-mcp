@@ -16,10 +16,12 @@ Architecture:
 7. Audit findings feed back into blacklist
 """
 
+import asyncio
 import hashlib
 import json
 import os
 import re
+import subprocess
 from pathlib import Path
 from typing import Any, Optional
 
@@ -74,6 +76,550 @@ _delta_collection: Optional[Any] = None
 
 # Tree-sitter parser cache
 _parsers: dict[str, Any] = {}
+
+# Ollama status cache
+_ollama_status_cache: dict[str, Any] = {
+    "checked_at": None,
+    "running": False,
+    "models": [],
+    "embedding_model_available": False,
+    "ttl_seconds": 60,
+}
+
+# Embedding model is lightweight, no strict RAM requirements
+MIN_RAM_GB = 8  # nomic-embed-text is small
+
+
+# =============================================================================
+# Ollama Setup Functions
+# =============================================================================
+
+
+def _check_system_requirements() -> dict:
+    """Check if the system meets requirements for running Ollama."""
+    import platform
+
+    result = {
+        "platform": platform.system(),
+        "machine": platform.machine(),
+        "is_macos": False,
+        "is_apple_silicon": False,
+        "ram_gb": 0,
+        "ram_sufficient": False,
+        "homebrew_installed": False,
+        "ollama_installed": False,
+        "meets_requirements": False,
+        "issues": [],
+        "recommendations": [],
+    }
+
+    # Check macOS
+    if platform.system() == "Darwin":
+        result["is_macos"] = True
+    else:
+        result["issues"].append(f"Not macOS (detected: {platform.system()})")
+        result["recommendations"].append("Ollama auto-setup is only supported on macOS")
+
+    # Check Apple Silicon
+    machine = platform.machine()
+    if machine == "arm64":
+        result["is_apple_silicon"] = True
+        try:
+            chip_info = subprocess.run(
+                ["sysctl", "-n", "machdep.cpu.brand_string"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if chip_info.returncode == 0:
+                result["chip"] = chip_info.stdout.strip()
+        except Exception:
+            result["chip"] = "Apple Silicon (arm64)"
+    else:
+        result["issues"].append(f"Not Apple Silicon (detected: {machine})")
+        result["recommendations"].append("Apple Silicon recommended for optimal performance")
+
+    # Check RAM
+    try:
+        if platform.system() == "Darwin":
+            mem_info = subprocess.run(
+                ["sysctl", "-n", "hw.memsize"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if mem_info.returncode == 0:
+                ram_bytes = int(mem_info.stdout.strip())
+                ram_gb = ram_bytes / (1024**3)
+                result["ram_gb"] = round(ram_gb, 1)
+                result["ram_sufficient"] = ram_gb >= MIN_RAM_GB
+    except Exception as e:
+        result["issues"].append(f"Could not determine RAM: {e}")
+
+    # Check Homebrew
+    try:
+        brew_check = subprocess.run(
+            ["which", "brew"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        result["homebrew_installed"] = brew_check.returncode == 0
+        if result["homebrew_installed"]:
+            result["homebrew_path"] = brew_check.stdout.strip()
+        else:
+            result["issues"].append("Homebrew not installed")
+            result["recommendations"].append(
+                'Install Homebrew: /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+            )
+    except Exception:
+        result["issues"].append("Could not check for Homebrew")
+
+    # Check if Ollama is already installed
+    try:
+        ollama_check = subprocess.run(
+            ["which", "ollama"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        result["ollama_installed"] = ollama_check.returncode == 0
+        if result["ollama_installed"]:
+            result["ollama_path"] = ollama_check.stdout.strip()
+            try:
+                version_check = subprocess.run(
+                    ["ollama", "--version"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                if version_check.returncode == 0:
+                    result["ollama_version"] = version_check.stdout.strip()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    result["meets_requirements"] = (
+        result["is_macos"] and result["is_apple_silicon"] and result["ram_sufficient"] and result["homebrew_installed"]
+    )
+
+    return result
+
+
+async def _check_ollama_status(force_refresh: bool = False) -> dict:
+    """Check Ollama server status and available models. Cached with TTL."""
+    import time
+
+    cache = _ollama_status_cache
+    now = time.time()
+
+    if not force_refresh and cache["checked_at"] is not None:
+        if now - cache["checked_at"] < cache["ttl_seconds"]:
+            return {
+                "running": cache["running"],
+                "models": cache["models"],
+                "embedding_model_available": cache["embedding_model_available"],
+                "cached": True,
+                "checked_at": cache["checked_at"],
+            }
+
+    if not HAS_HTTPX:
+        cache.update({
+            "checked_at": now,
+            "running": False,
+            "models": [],
+            "embedding_model_available": False,
+        })
+        return {
+            "running": False,
+            "error": "httpx not installed",
+            "models": [],
+            "embedding_model_available": False,
+            "cached": False,
+        }
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(f"{OLLAMA_URL}/api/tags")
+            response.raise_for_status()
+
+            data = response.json()
+            models = [m.get("name", "") for m in data.get("models", [])]
+
+            # Check if embedding model is available
+            model_base = EMBEDDING_MODEL.split(":")[0]
+            embedding_available = any(m.startswith(model_base) for m in models)
+
+            cache.update({
+                "checked_at": now,
+                "running": True,
+                "models": models,
+                "embedding_model_available": embedding_available,
+            })
+
+            return {
+                "running": True,
+                "url": OLLAMA_URL,
+                "models": models,
+                "model_count": len(models),
+                "embedding_model": EMBEDDING_MODEL,
+                "embedding_model_available": embedding_available,
+                "cached": False,
+                "checked_at": now,
+            }
+
+    except httpx.ConnectError:
+        cache.update({
+            "checked_at": now,
+            "running": False,
+            "models": [],
+            "embedding_model_available": False,
+        })
+        return {
+            "running": False,
+            "url": OLLAMA_URL,
+            "error": "connection_refused",
+            "message": "Ollama server not running. Start with: ollama serve",
+            "models": [],
+            "embedding_model_available": False,
+            "cached": False,
+        }
+    except Exception as e:
+        cache.update({
+            "checked_at": now,
+            "running": False,
+            "models": [],
+            "embedding_model_available": False,
+        })
+        return {
+            "running": False,
+            "url": OLLAMA_URL,
+            "error": "check_failed",
+            "message": str(e),
+            "models": [],
+            "embedding_model_available": False,
+            "cached": False,
+        }
+
+
+async def _setup_ollama(
+    install: bool = False,
+    start_service: bool = False,
+    pull_model: bool = False,
+    model: str = "",
+) -> dict:
+    """Setup Ollama: install via Homebrew, start service, and pull model."""
+    if not model:
+        model = EMBEDDING_MODEL
+
+    result = {
+        "actions_taken": [],
+        "actions_skipped": [],
+        "errors": [],
+        "success": True,
+    }
+
+    sys_check = _check_system_requirements()
+    result["system_check"] = sys_check
+
+    if not sys_check["is_macos"]:
+        result["errors"].append("Ollama auto-setup only supported on macOS")
+        result["success"] = False
+        return result
+
+    if not sys_check["homebrew_installed"] and install:
+        result["errors"].append(
+            "Homebrew required for installation. Install with: "
+            '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+        )
+        result["success"] = False
+        return result
+
+    # Install Ollama via Homebrew
+    if install:
+        if sys_check["ollama_installed"]:
+            result["actions_skipped"].append("Ollama already installed")
+        else:
+            try:
+                install_proc = subprocess.run(
+                    ["brew", "install", "ollama"],
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                )
+                if install_proc.returncode == 0:
+                    result["actions_taken"].append("Installed Ollama via Homebrew")
+                    sys_check["ollama_installed"] = True
+                else:
+                    result["errors"].append(f"Failed to install Ollama: {install_proc.stderr}")
+                    result["success"] = False
+            except subprocess.TimeoutExpired:
+                result["errors"].append("Ollama installation timed out (5 min limit)")
+                result["success"] = False
+            except Exception as e:
+                result["errors"].append(f"Installation error: {e}")
+                result["success"] = False
+
+    # Start Ollama service
+    if start_service and result["success"]:
+        if not sys_check["ollama_installed"]:
+            result["errors"].append("Cannot start service: Ollama not installed")
+            result["success"] = False
+        else:
+            try:
+                status = await _check_ollama_status(force_refresh=True)
+                if status.get("running"):
+                    result["actions_skipped"].append("Ollama service already running")
+                else:
+                    start_proc = subprocess.run(
+                        ["brew", "services", "start", "ollama"],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    if start_proc.returncode == 0:
+                        result["actions_taken"].append("Started Ollama service via Homebrew")
+                        await asyncio.sleep(2)
+                    else:
+                        result["actions_skipped"].append("brew services failed, try: ollama serve &")
+            except Exception as e:
+                result["errors"].append(f"Failed to start service: {e}")
+
+    # Pull model
+    if pull_model and result["success"]:
+        if not sys_check["ollama_installed"]:
+            result["errors"].append("Cannot pull model: Ollama not installed")
+            result["success"] = False
+        else:
+            status = await _check_ollama_status(force_refresh=True)
+            model_base = model.split(":")[0]
+            already_pulled = any(m.startswith(model_base) for m in status.get("models", []))
+
+            if already_pulled:
+                result["actions_skipped"].append(f"Model {model} already available")
+            else:
+                try:
+                    result["actions_taken"].append(f"Pulling model {model}...")
+                    pull_proc = subprocess.run(
+                        ["ollama", "pull", model],
+                        capture_output=True,
+                        text=True,
+                        timeout=600,  # 10 min for embedding model
+                    )
+                    if pull_proc.returncode == 0:
+                        result["actions_taken"].append(f"Successfully pulled {model}")
+                    else:
+                        result["errors"].append(f"Failed to pull {model}: {pull_proc.stderr}")
+                        result["success"] = False
+                except subprocess.TimeoutExpired:
+                    result["errors"].append("Model pull timed out (10 min limit)")
+                    result["success"] = False
+                except Exception as e:
+                    result["errors"].append(f"Pull error: {e}")
+                    result["success"] = False
+
+    if result["success"]:
+        final_status = await _check_ollama_status(force_refresh=True)
+        result["ollama_status"] = final_status
+
+    return result
+
+
+async def _setup_ollama_direct(
+    install: bool = False,
+    start_service: bool = False,
+    pull_model: bool = False,
+    model: str = "",
+) -> dict:
+    """Setup Ollama via direct download - no Homebrew, no sudo."""
+    import shutil
+
+    if not model:
+        model = EMBEDDING_MODEL
+
+    result = {
+        "method": "direct_download",
+        "actions_taken": [],
+        "actions_skipped": [],
+        "errors": [],
+        "warnings": [],
+        "success": True,
+    }
+
+    sys_check = _check_system_requirements()
+    result["system_check"] = {
+        "is_macos": sys_check["is_macos"],
+        "is_apple_silicon": sys_check["is_apple_silicon"],
+        "ram_gb": sys_check["ram_gb"],
+    }
+
+    if not sys_check["is_macos"]:
+        result["errors"].append("Direct download setup only supported on macOS")
+        result["success"] = False
+        return result
+
+    home = Path.home()
+    install_dir = home / "Applications"
+    app_path = install_dir / "Ollama.app"
+    cli_path = app_path / "Contents" / "Resources" / "ollama"
+
+    # Install
+    if install:
+        if app_path.exists():
+            result["actions_skipped"].append(f"Ollama already installed at {app_path}")
+        else:
+            try:
+                install_dir.mkdir(parents=True, exist_ok=True)
+                download_url = "https://ollama.com/download/Ollama-darwin.zip"
+                zip_path = Path("/tmp/Ollama-darwin.zip")
+                extract_dir = Path("/tmp/ollama-extract")
+
+                result["actions_taken"].append(f"Downloading from {download_url}...")
+
+                download_proc = subprocess.run(
+                    ["curl", "-L", "-o", str(zip_path), download_url],
+                    capture_output=True,
+                    text=True,
+                    timeout=600,
+                )
+
+                if download_proc.returncode != 0:
+                    result["errors"].append(f"Download failed: {download_proc.stderr}")
+                    result["success"] = False
+                    return result
+
+                result["actions_taken"].append("Download complete")
+
+                if extract_dir.exists():
+                    shutil.rmtree(extract_dir)
+                extract_dir.mkdir(parents=True, exist_ok=True)
+
+                result["actions_taken"].append("Extracting...")
+                extract_proc = subprocess.run(
+                    ["unzip", "-q", str(zip_path), "-d", str(extract_dir)],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+
+                if extract_proc.returncode != 0:
+                    result["errors"].append(f"Extraction failed: {extract_proc.stderr}")
+                    result["success"] = False
+                    return result
+
+                extracted_app = extract_dir / "Ollama.app"
+                if not extracted_app.exists():
+                    for item in extract_dir.iterdir():
+                        if item.name == "Ollama.app" or item.suffix == ".app":
+                            extracted_app = item
+                            break
+
+                if extracted_app.exists():
+                    shutil.move(str(extracted_app), str(app_path))
+                    result["actions_taken"].append(f"Installed to {app_path}")
+                else:
+                    result["errors"].append("Could not find Ollama.app in extracted contents")
+                    result["success"] = False
+                    return result
+
+                zip_path.unlink(missing_ok=True)
+                shutil.rmtree(extract_dir, ignore_errors=True)
+
+                result["path_setup"] = {
+                    "cli_path": str(cli_path),
+                    "add_to_path": f'export PATH="{cli_path.parent}:$PATH"',
+                }
+
+            except subprocess.TimeoutExpired:
+                result["errors"].append("Download timed out (10 min limit)")
+                result["success"] = False
+            except Exception as e:
+                result["errors"].append(f"Installation error: {e}")
+                result["success"] = False
+
+    # Start service
+    if start_service and result["success"]:
+        effective_cli = None
+        if cli_path.exists():
+            effective_cli = cli_path
+        else:
+            which_proc = subprocess.run(["which", "ollama"], capture_output=True, text=True)
+            if which_proc.returncode == 0:
+                effective_cli = Path(which_proc.stdout.strip())
+
+        if not effective_cli:
+            result["errors"].append(f"Ollama CLI not found at {cli_path} or in PATH")
+            result["success"] = False
+        else:
+            status = await _check_ollama_status(force_refresh=True)
+            if status.get("running"):
+                result["actions_skipped"].append("Ollama service already running")
+            else:
+                try:
+                    subprocess.Popen(
+                        ["nohup", str(effective_cli), "serve"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
+                    result["actions_taken"].append("Started Ollama service (ollama serve)")
+                    await asyncio.sleep(3)
+
+                    status = await _check_ollama_status(force_refresh=True)
+                    if status.get("running"):
+                        result["actions_taken"].append("Service is running")
+                    else:
+                        result["warnings"].append("Service may still be starting")
+                except Exception as e:
+                    result["errors"].append(f"Failed to start service: {e}")
+
+    # Pull model
+    if pull_model and result["success"]:
+        effective_cli = None
+        if cli_path.exists():
+            effective_cli = cli_path
+        else:
+            which_proc = subprocess.run(["which", "ollama"], capture_output=True, text=True)
+            if which_proc.returncode == 0:
+                effective_cli = Path(which_proc.stdout.strip())
+
+        if not effective_cli:
+            result["errors"].append("Ollama CLI not found. Cannot pull model.")
+            result["success"] = False
+        else:
+            status = await _check_ollama_status(force_refresh=True)
+            model_base = model.split(":")[0]
+            already_pulled = any(m.startswith(model_base) for m in status.get("models", []))
+
+            if already_pulled:
+                result["actions_skipped"].append(f"Model {model} already available")
+            else:
+                try:
+                    result["actions_taken"].append(f"Pulling model {model}...")
+                    pull_proc = subprocess.run(
+                        [str(effective_cli), "pull", model],
+                        capture_output=True,
+                        text=True,
+                        timeout=600,
+                    )
+                    if pull_proc.returncode == 0:
+                        result["actions_taken"].append(f"Successfully pulled {model}")
+                    else:
+                        result["errors"].append(f"Failed to pull {model}: {pull_proc.stderr}")
+                        result["success"] = False
+                except subprocess.TimeoutExpired:
+                    result["errors"].append("Model pull timed out (10 min limit)")
+                    result["success"] = False
+                except Exception as e:
+                    result["errors"].append(f"Pull error: {e}")
+                    result["success"] = False
+
+    if result["success"]:
+        final_status = await _check_ollama_status(force_refresh=True)
+        result["ollama_status"] = final_status
+
+    return result
 
 
 # =============================================================================
@@ -242,20 +788,15 @@ def _normalize_code_fallback(code: str) -> str:
     Fallback normalization when tree-sitter is unavailable.
 
     Uses regex-based normalization (less accurate but works without dependencies).
+    Order matters: strip comments, replace identifiers, then literals, then numbers.
     """
-    # Strip comments
+    # Strip comments first
     code = re.sub(r'#.*$', '', code, flags=re.MULTILINE)  # Python comments
     code = re.sub(r'//.*$', '', code, flags=re.MULTILINE)  # C-style line comments
     code = re.sub(r'/\*.*?\*/', '', code, flags=re.DOTALL)  # Block comments
 
-    # Replace string literals
-    code = re.sub(r'"[^"]*"', '"S"', code)
-    code = re.sub(r"'[^']*'", '"S"', code)
-
-    # Replace numbers
-    code = re.sub(r'\b\d+\.?\d*\b', 'N', code)
-
-    # Replace identifiers (simple heuristic: word characters not keywords)
+    # Replace identifiers FIRST (before touching strings/numbers)
+    # This avoids issues with placeholders being matched
     keywords = {
         'import', 'from', 'def', 'class', 'return', 'if', 'else', 'elif',
         'for', 'while', 'try', 'except', 'finally', 'with', 'as', 'async',
@@ -268,6 +809,13 @@ def _normalize_code_fallback(code: str) -> str:
         return word if word in keywords else '_'
 
     code = re.sub(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', replace_identifier, code)
+
+    # Now replace string literals (contents are already identifier-replaced if needed)
+    code = re.sub(r'"[^"]*"', '"S"', code)
+    code = re.sub(r"'[^']*'", '"S"', code)
+
+    # Replace numbers
+    code = re.sub(r'\b\d+\.?\d*\b', 'N', code)
 
     # Compact whitespace
     code = re.sub(r'\s+', ' ', code)
@@ -393,7 +941,140 @@ async def _check_against_blacklist(
 
 
 # =============================================================================
-# MCP Tools
+# MCP Tools - Ollama Setup
+# =============================================================================
+
+
+@mcp.tool()
+async def firewall_system_check() -> dict:
+    """Check if system meets requirements for Ollama embeddings.
+
+    Verifies: macOS, Apple Silicon (M1/M2/M3/M4), RAM, Homebrew installed.
+    Use before attempting Ollama setup.
+    """
+    result = _check_system_requirements()
+
+    if result["meets_requirements"]:
+        result["summary"] = (
+            f"System ready for Ollama! {result.get('chip', 'Apple Silicon')} with "
+            f"{result['ram_gb']}GB RAM. Use firewall_setup_ollama to install."
+        )
+    else:
+        result["summary"] = f"System check: {len(result['issues'])} issue(s) found."
+
+    return result
+
+
+@mcp.tool()
+async def firewall_setup_ollama(
+    install: bool = False,
+    start_service: bool = False,
+    pull_model: bool = False,
+    model: str = "",
+) -> dict:
+    """Install Ollama via Homebrew (macOS).
+
+    Args:
+        install: Install Ollama via Homebrew
+        start_service: Start Ollama as a background service
+        pull_model: Pull the embedding model (nomic-embed-text)
+        model: Model to pull (default: nomic-embed-text)
+    """
+    if not any([install, start_service, pull_model]):
+        sys_check = _check_system_requirements()
+        return {
+            "message": "No actions specified. Use install=true, start_service=true, or pull_model=true.",
+            "system_check": sys_check,
+            "default_model": EMBEDDING_MODEL,
+            "example": "firewall_setup_ollama(install=true, start_service=true, pull_model=true)",
+        }
+
+    result = await _setup_ollama(
+        install=install,
+        start_service=start_service,
+        pull_model=pull_model,
+        model=model or EMBEDDING_MODEL,
+    )
+
+    if result["success"]:
+        result["summary"] = (
+            f"Setup complete! Actions: {', '.join(result['actions_taken']) or 'none'}. "
+            f"Skipped: {', '.join(result['actions_skipped']) or 'none'}."
+        )
+    else:
+        result["summary"] = f"Setup failed: {'; '.join(result['errors'])}"
+
+    return result
+
+
+@mcp.tool()
+async def firewall_setup_ollama_direct(
+    install: bool = False,
+    start_service: bool = False,
+    pull_model: bool = False,
+    model: str = "",
+) -> dict:
+    """Install Ollama via direct download (macOS) - no Homebrew, no sudo.
+
+    Args:
+        install: Download and install Ollama to ~/Applications
+        start_service: Start Ollama server in background
+        pull_model: Pull the embedding model (nomic-embed-text)
+        model: Model to pull (default: nomic-embed-text)
+    """
+    if not any([install, start_service, pull_model]):
+        return {
+            "message": "No actions specified. Use install=true, start_service=true, or pull_model=true.",
+            "method": "direct_download",
+            "default_model": EMBEDDING_MODEL,
+            "advantages": [
+                "No Homebrew required",
+                "No sudo/admin permissions needed",
+                "Works on locked-down machines",
+            ],
+            "example": "firewall_setup_ollama_direct(install=true, start_service=true, pull_model=true)",
+        }
+
+    result = await _setup_ollama_direct(
+        install=install,
+        start_service=start_service,
+        pull_model=pull_model,
+        model=model or EMBEDDING_MODEL,
+    )
+
+    if result["success"]:
+        result["summary"] = (
+            f"Setup complete (direct download)! Actions: {', '.join(result['actions_taken']) or 'none'}."
+        )
+    else:
+        result["summary"] = f"Setup failed: {'; '.join(result['errors'])}"
+
+    return result
+
+
+@mcp.tool()
+async def firewall_ollama_status(force_refresh: bool = False) -> dict:
+    """Check Ollama server status and embedding model availability.
+
+    Args:
+        force_refresh: Force refresh the cached status
+    """
+    status = await _check_ollama_status(force_refresh=force_refresh)
+
+    if status["running"] and status.get("embedding_model_available"):
+        status["recommendation"] = "Ollama is ready! Embeddings will use local inference."
+    elif status["running"] and not status.get("embedding_model_available"):
+        status["recommendation"] = f"Ollama is running but {EMBEDDING_MODEL} not found. Run: ollama pull {EMBEDDING_MODEL}"
+    else:
+        status["recommendation"] = (
+            f"Ollama not available. Run: ollama serve && ollama pull {EMBEDDING_MODEL}"
+        )
+
+    return status
+
+
+# =============================================================================
+# MCP Tools - Firewall
 # =============================================================================
 
 @mcp.tool()
