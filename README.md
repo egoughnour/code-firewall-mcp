@@ -1,5 +1,7 @@
 # Code Firewall MCP
 
+<!-- mcp-name: io.github.egoughnour/code-firewall-mcp -->
+
 A structural similarity-based code security filter for MCP (Model Context Protocol). Blocks dangerous code patterns before they reach execution tools by comparing code structure against a blacklist of known-bad patterns.
 
 ## How It Works
