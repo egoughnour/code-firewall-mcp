@@ -3,7 +3,7 @@
   "name": "code-firewall-mcp",
   "display_name": "Code Firewall MCP",
   "version": "0.1.0",
-  "description": "Structural similarity-based code security filter. Blocks dangerous code patterns before they reach execution tools by comparing code structure against a blacklist of known-bad patterns using tree-sitter, Ollama embeddings, and ChromaDB.",
+  "description": "Structural similarity-based code filter. Stops malicious code pattern reaching execution tools.",
   "author": {
     "name": "Erik Goughnour",
     "email": "e.goughnour@gmail.com"
