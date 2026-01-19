@@ -3,12 +3,14 @@
 <!-- mcp-name: io.github.egoughnour/code-firewall-mcp -->
 
 [![PyPI](https://img.shields.io/pypi/v/code-firewall-mcp?style=flat-square&logo=pypi&logoColor=white)](https://pypi.org/project/code-firewall-mcp/)
-[![MCP Registry](https://img.shields.io/badge/MCP-Registry-blue?style=flat-square&logo=anthropic&logoColor=white)](https://registry.mcp.so/servers/io.github.egoughnour/code-firewall-mcp)
 [![Claude Desktop](https://img.shields.io/badge/Claude-Desktop-orange?style=flat-square&logo=anthropic&logoColor=white)](https://github.com/egoughnour/code-firewall-mcp/releases/latest/download/code-firewall-mcp.mcpb)
 [![Tests](https://img.shields.io/github/actions/workflow/status/egoughnour/code-firewall-mcp/test.yml?style=flat-square&logo=github-actions&label=Tests)](https://github.com/egoughnour/code-firewall-mcp/actions/workflows/test.yml)
 [![Release](https://img.shields.io/github/actions/workflow/status/egoughnour/code-firewall-mcp/release.yml?style=flat-square&logo=github-actions&label=Release)](https://github.com/egoughnour/code-firewall-mcp/actions/workflows/release.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](https://opensource.org/licenses/MIT)
+
+[![Top Language](https://img.shields.io/github/languages/top/egoughnour/code-firewall-mcp?style=flat-square&color=3379ef)](https://github.com/egoughnour/code-firewall-mcp/languages) [![Code Size](https://img.shields.io/github/languages/code-size/egoughnour/code-firewall-mcp?style=flat-square&color=3379ef)](https://github.com/egoughnour/code-firewall-mcp) [![Last Commit](https://img.shields.io/github/last-commit/egoughnour/code-firewall-mcp?style=flat-square&color=2579ef&logo=github)](https://github.com/egoughnour/code-firewall-mcp/commits/main) [![Repository Size](https://img.shields.io/github/repo-size/egoughnour/code-firewall-mcp?style=flat-square&color=3379ef)](https://github.com/egoughnour/code-firewall-mcp)
+
 
 A structural similarity-based code security filter for MCP (Model Context Protocol). Blocks dangerous code patterns before they reach execution tools by comparing code structure against a blacklist of known-bad patterns.
 
