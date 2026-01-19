@@ -867,6 +867,10 @@ def normalize_code(code: str, language: str = "python") -> str:
 
     Tries tree-sitter first, falls back to regex-based normalization.
     """
+    # Handle empty/whitespace-only input
+    if not code or not code.strip():
+        return ""
+
     if HAS_TREE_SITTER:
         result = _normalize_code(code, language)
         if result:
