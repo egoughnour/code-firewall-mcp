@@ -1,7 +1,12 @@
 """Tests for code normalization."""
 
 import pytest
-from src.firewall_server import normalize_code, _normalize_code_fallback, _hash_structure
+from src.firewall_server import (
+    normalize_code,
+    _normalize_code_fallback,
+    _hash_structure,
+    SECURITY_SENSITIVE_IDENTIFIERS,
+)
 
 
 class TestNormalizationFallback:
@@ -51,6 +56,67 @@ class TestNormalizationFallback:
         assert "   " not in result
 
 
+class TestSecuritySensitiveIdentifiers:
+    """Test that security-sensitive identifiers are preserved."""
+
+    def test_preserves_eval(self):
+        code = "eval(user_input)"
+        result = _normalize_code_fallback(code)
+        assert "eval" in result
+        assert "user_input" not in result
+
+    def test_preserves_exec(self):
+        code = "exec(code_string)"
+        result = _normalize_code_fallback(code)
+        assert "exec" in result
+        assert "code_string" not in result
+
+    def test_preserves_os_system(self):
+        code = 'os.system("rm -rf /")'
+        result = _normalize_code_fallback(code)
+        assert "os" in result
+        assert "system" in result
+
+    def test_preserves_subprocess(self):
+        code = "subprocess.Popen(['ls'], shell=True)"
+        result = _normalize_code_fallback(code)
+        assert "subprocess" in result
+        assert "Popen" in result
+        assert "shell" in result
+
+    def test_preserves_dangerous_builtins(self):
+        code = "__import__('os').system('cmd')"
+        result = _normalize_code_fallback(code)
+        assert "__import__" in result
+        assert "system" in result
+        # Note: 'os' is inside a string literal, so it becomes "S"
+        # That's correct - we preserve the identifier __import__ and system,
+        # but string contents are still normalized
+
+    def test_preserves_reflection(self):
+        code = "getattr(obj, attr_name)"
+        result = _normalize_code_fallback(code)
+        assert "getattr" in result
+        assert "obj" not in result
+        assert "attr_name" not in result
+
+    def test_preserves_file_operations(self):
+        code = "open(filename).read()"
+        result = _normalize_code_fallback(code)
+        assert "open" in result
+        assert "read" in result
+        assert "filename" not in result
+
+    def test_security_identifiers_set_not_empty(self):
+        """Ensure the security identifiers set contains expected items."""
+        assert "eval" in SECURITY_SENSITIVE_IDENTIFIERS
+        assert "exec" in SECURITY_SENSITIVE_IDENTIFIERS
+        assert "system" in SECURITY_SENSITIVE_IDENTIFIERS
+        assert "subprocess" in SECURITY_SENSITIVE_IDENTIFIERS
+        assert "Popen" in SECURITY_SENSITIVE_IDENTIFIERS
+        assert "shell" in SECURITY_SENSITIVE_IDENTIFIERS
+
+
 class TestStructuralEquivalence:
     """Test that structurally similar code normalizes to the same form."""
 
@@ -63,10 +129,13 @@ class TestStructuralEquivalence:
         norm2 = _normalize_code_fallback(code2)
         norm3 = _normalize_code_fallback(code3)
 
-        # All should have same structure (after stripping literals/identifiers)
-        # The key insight: the structure _._(X) is the same
-        assert norm1 == norm2  # Both have string literal
-        # norm3 differs because it has identifier instead of string
+        # Both with string literals should be the same
+        assert norm1 == norm2
+        # With identifier differs (identifier becomes _)
+        assert norm1 != norm3
+        # But all preserve os.system
+        assert "os.system" in norm1
+        assert "os.system" in norm3
 
     def test_function_calls_same_structure(self):
         code1 = "subprocess.run(['curl', url])"
@@ -75,8 +144,10 @@ class TestStructuralEquivalence:
         norm1 = _normalize_code_fallback(code1)
         norm2 = _normalize_code_fallback(code2)
 
-        # Should be equivalent structures
+        # Should be equivalent structures (subprocess.run preserved)
         assert norm1 == norm2
+        assert "subprocess" in norm1
+        assert "run" in norm1
 
     def test_different_structures_normalize_differently(self):
         code1 = "os.system(cmd)"
@@ -85,9 +156,11 @@ class TestStructuralEquivalence:
         norm1 = _normalize_code_fallback(code1)
         norm2 = _normalize_code_fallback(code2)
 
-        # These actually normalize the same in fallback mode
-        # (both are just _._(x)) - this is expected behavior
-        # The embedding will differentiate based on context
+        # Now these are DIFFERENT because os.system is preserved
+        assert norm1 != norm2
+        assert "os" in norm1
+        assert "system" in norm1
+        assert "os" not in norm2
 
 
 class TestHashStructure:

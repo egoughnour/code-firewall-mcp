@@ -721,11 +721,45 @@ def _parse_to_cst(code: str, language: str) -> Optional[Any]:
 # Structural Normalization
 # =============================================================================
 
+# Security-sensitive identifiers to PRESERVE in normalized code.
+# These are "inverse stop words" - retaining them makes embeddings more
+# discriminative for dangerous patterns like os.system, eval, exec, etc.
+SECURITY_SENSITIVE_IDENTIFIERS = {
+    # Dangerous builtins
+    "eval", "exec", "compile", "__import__",
+    # OS/system execution
+    "system", "popen", "spawn", "fork", "execl", "execle", "execlp",
+    "execv", "execve", "execvp", "spawnl", "spawnle", "spawnlp",
+    "spawnv", "spawnve", "spawnvp",
+    # Subprocess
+    "subprocess", "Popen", "call", "check_call", "check_output", "run",
+    # Shell flag
+    "shell",
+    # OS module functions
+    "os", "remove", "unlink", "rmdir", "removedirs", "rename", "chmod",
+    "chown", "link", "symlink", "mkdir", "makedirs",
+    # File operations
+    "open", "read", "write", "truncate",
+    # Network
+    "socket", "connect", "bind", "listen", "accept", "send", "recv",
+    "urlopen", "urlretrieve", "Request",
+    # Code loading
+    "load", "loads", "pickle", "unpickle", "marshal",
+    # Dangerous attributes
+    "__class__", "__bases__", "__subclasses__", "__mro__",
+    "__globals__", "__code__", "__builtins__",
+    # ctypes/cffi (FFI)
+    "ctypes", "cffi", "CDLL", "windll", "oledll",
+    # Reflection
+    "getattr", "setattr", "delattr", "hasattr",
+}
+
+
 def _normalize_node(node, depth: int = 0) -> str:
     """
     Recursively normalize a CST node to its structural skeleton.
 
-    - Strips identifier names → replaced with '_'
+    - Strips identifier names → replaced with '_' (except security-sensitive ones)
     - Strips literal values → replaced with type marker
     - Preserves node types and structure
     - Returns compact string representation
@@ -735,8 +769,11 @@ def _normalize_node(node, depth: int = 0) -> str:
 
     node_type = node.type
 
-    # Replace identifiers with placeholder
+    # Replace identifiers with placeholder, EXCEPT security-sensitive ones
     if node_type == "identifier":
+        text = node.text.decode("utf-8") if isinstance(node.text, bytes) else node.text
+        if text in SECURITY_SENSITIVE_IDENTIFIERS:
+            return text  # Preserve security-sensitive identifier
         return "_"
 
     # Replace literals with type markers
@@ -796,17 +833,19 @@ def _normalize_code_fallback(code: str) -> str:
     code = re.sub(r'/\*.*?\*/', '', code, flags=re.DOTALL)  # Block comments
 
     # Replace identifiers FIRST (before touching strings/numbers)
-    # This avoids issues with placeholders being matched
+    # Preserve: Python keywords + security-sensitive identifiers
     keywords = {
         'import', 'from', 'def', 'class', 'return', 'if', 'else', 'elif',
         'for', 'while', 'try', 'except', 'finally', 'with', 'as', 'async',
         'await', 'yield', 'raise', 'pass', 'break', 'continue', 'and', 'or',
         'not', 'in', 'is', 'lambda', 'global', 'nonlocal', 'True', 'False', 'None',
     }
+    # Combine keywords with security-sensitive identifiers
+    preserve = keywords | SECURITY_SENSITIVE_IDENTIFIERS
 
     def replace_identifier(match):
         word = match.group(0)
-        return word if word in keywords else '_'
+        return word if word in preserve else '_'
 
     code = re.sub(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', replace_identifier, code)
 
