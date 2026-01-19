@@ -29,6 +29,7 @@ from fastmcp import FastMCP
 # Conditional imports with availability flags
 try:
     import httpx
+
     HAS_HTTPX = True
 except ImportError:
     HAS_HTTPX = False
@@ -36,6 +37,7 @@ except ImportError:
 try:
     import chromadb
     from chromadb.config import Settings
+
     HAS_CHROMADB = True
 except ImportError:
     HAS_CHROMADB = False
@@ -43,6 +45,7 @@ except ImportError:
 try:
     import tree_sitter_python as tspython
     from tree_sitter import Language, Parser
+
     HAS_TREE_SITTER = True
 except ImportError:
     HAS_TREE_SITTER = False
@@ -224,12 +227,14 @@ async def _check_ollama_status(force_refresh: bool = False) -> dict:
             }
 
     if not HAS_HTTPX:
-        cache.update({
-            "checked_at": now,
-            "running": False,
-            "models": [],
-            "embedding_model_available": False,
-        })
+        cache.update(
+            {
+                "checked_at": now,
+                "running": False,
+                "models": [],
+                "embedding_model_available": False,
+            }
+        )
         return {
             "running": False,
             "error": "httpx not installed",
@@ -250,12 +255,14 @@ async def _check_ollama_status(force_refresh: bool = False) -> dict:
             model_base = EMBEDDING_MODEL.split(":")[0]
             embedding_available = any(m.startswith(model_base) for m in models)
 
-            cache.update({
-                "checked_at": now,
-                "running": True,
-                "models": models,
-                "embedding_model_available": embedding_available,
-            })
+            cache.update(
+                {
+                    "checked_at": now,
+                    "running": True,
+                    "models": models,
+                    "embedding_model_available": embedding_available,
+                }
+            )
 
             return {
                 "running": True,
@@ -269,12 +276,14 @@ async def _check_ollama_status(force_refresh: bool = False) -> dict:
             }
 
     except httpx.ConnectError:
-        cache.update({
-            "checked_at": now,
-            "running": False,
-            "models": [],
-            "embedding_model_available": False,
-        })
+        cache.update(
+            {
+                "checked_at": now,
+                "running": False,
+                "models": [],
+                "embedding_model_available": False,
+            }
+        )
         return {
             "running": False,
             "url": OLLAMA_URL,
@@ -285,12 +294,14 @@ async def _check_ollama_status(force_refresh: bool = False) -> dict:
             "cached": False,
         }
     except Exception as e:
-        cache.update({
-            "checked_at": now,
-            "running": False,
-            "models": [],
-            "embedding_model_available": False,
-        })
+        cache.update(
+            {
+                "checked_at": now,
+                "running": False,
+                "models": [],
+                "embedding_model_available": False,
+            }
+        )
         return {
             "running": False,
             "url": OLLAMA_URL,
@@ -625,6 +636,7 @@ async def _setup_ollama_direct(
 # ChromaDB Setup
 # =============================================================================
 
+
 def _get_chroma_client():
     """Get or create ChromaDB client."""
     global _chroma_client
@@ -665,6 +677,7 @@ def _get_delta_collection():
 # =============================================================================
 # Tree-sitter Parsing
 # =============================================================================
+
 
 def _get_parser(language: str) -> Optional[Any]:
     """Get or create a tree-sitter parser for the given language."""
@@ -725,32 +738,90 @@ def _parse_to_cst(code: str, language: str) -> Optional[Any]:
 # discriminative for dangerous patterns like os.system, eval, exec, etc.
 SECURITY_SENSITIVE_IDENTIFIERS = {
     # Dangerous builtins
-    "eval", "exec", "compile", "__import__",
+    "eval",
+    "exec",
+    "compile",
+    "__import__",
     # OS/system execution
-    "system", "popen", "spawn", "fork", "execl", "execle", "execlp",
-    "execv", "execve", "execvp", "spawnl", "spawnle", "spawnlp",
-    "spawnv", "spawnve", "spawnvp",
+    "system",
+    "popen",
+    "spawn",
+    "fork",
+    "execl",
+    "execle",
+    "execlp",
+    "execv",
+    "execve",
+    "execvp",
+    "spawnl",
+    "spawnle",
+    "spawnlp",
+    "spawnv",
+    "spawnve",
+    "spawnvp",
     # Subprocess
-    "subprocess", "Popen", "call", "check_call", "check_output", "run",
+    "subprocess",
+    "Popen",
+    "call",
+    "check_call",
+    "check_output",
+    "run",
     # Shell flag
     "shell",
     # OS module functions
-    "os", "remove", "unlink", "rmdir", "removedirs", "rename", "chmod",
-    "chown", "link", "symlink", "mkdir", "makedirs",
+    "os",
+    "remove",
+    "unlink",
+    "rmdir",
+    "removedirs",
+    "rename",
+    "chmod",
+    "chown",
+    "link",
+    "symlink",
+    "mkdir",
+    "makedirs",
     # File operations
-    "open", "read", "write", "truncate",
+    "open",
+    "read",
+    "write",
+    "truncate",
     # Network
-    "socket", "connect", "bind", "listen", "accept", "send", "recv",
-    "urlopen", "urlretrieve", "Request",
+    "socket",
+    "connect",
+    "bind",
+    "listen",
+    "accept",
+    "send",
+    "recv",
+    "urlopen",
+    "urlretrieve",
+    "Request",
     # Code loading
-    "load", "loads", "pickle", "unpickle", "marshal",
+    "load",
+    "loads",
+    "pickle",
+    "unpickle",
+    "marshal",
     # Dangerous attributes
-    "__class__", "__bases__", "__subclasses__", "__mro__",
-    "__globals__", "__code__", "__builtins__",
+    "__class__",
+    "__bases__",
+    "__subclasses__",
+    "__mro__",
+    "__globals__",
+    "__code__",
+    "__builtins__",
     # ctypes/cffi (FFI)
-    "ctypes", "cffi", "CDLL", "windll", "oledll",
+    "ctypes",
+    "cffi",
+    "CDLL",
+    "windll",
+    "oledll",
     # Reflection
-    "getattr", "setattr", "delattr", "hasattr",
+    "getattr",
+    "setattr",
+    "delattr",
+    "hasattr",
 }
 
 
@@ -814,7 +885,7 @@ def _normalize_code(code: str, language: str) -> Optional[str]:
     normalized = _normalize_node(root)
 
     # Compact whitespace
-    normalized = re.sub(r'\s+', ' ', normalized)
+    normalized = re.sub(r"\s+", " ", normalized)
 
     return normalized.strip()
 
@@ -827,36 +898,65 @@ def _normalize_code_fallback(code: str) -> str:
     Order matters: strip comments, replace identifiers, then literals, then numbers.
     """
     # Strip comments first
-    code = re.sub(r'#.*$', '', code, flags=re.MULTILINE)  # Python comments
-    code = re.sub(r'//.*$', '', code, flags=re.MULTILINE)  # C-style line comments
-    code = re.sub(r'/\*.*?\*/', '', code, flags=re.DOTALL)  # Block comments
+    code = re.sub(r"#.*$", "", code, flags=re.MULTILINE)  # Python comments
+    code = re.sub(r"//.*$", "", code, flags=re.MULTILINE)  # C-style line comments
+    code = re.sub(r"/\*.*?\*/", "", code, flags=re.DOTALL)  # Block comments
 
     # Replace identifiers FIRST (before touching strings/numbers)
     # Preserve: Python keywords + security-sensitive identifiers
     keywords = {
-        'import', 'from', 'def', 'class', 'return', 'if', 'else', 'elif',
-        'for', 'while', 'try', 'except', 'finally', 'with', 'as', 'async',
-        'await', 'yield', 'raise', 'pass', 'break', 'continue', 'and', 'or',
-        'not', 'in', 'is', 'lambda', 'global', 'nonlocal', 'True', 'False', 'None',
+        "import",
+        "from",
+        "def",
+        "class",
+        "return",
+        "if",
+        "else",
+        "elif",
+        "for",
+        "while",
+        "try",
+        "except",
+        "finally",
+        "with",
+        "as",
+        "async",
+        "await",
+        "yield",
+        "raise",
+        "pass",
+        "break",
+        "continue",
+        "and",
+        "or",
+        "not",
+        "in",
+        "is",
+        "lambda",
+        "global",
+        "nonlocal",
+        "True",
+        "False",
+        "None",
     }
     # Combine keywords with security-sensitive identifiers
     preserve = keywords | SECURITY_SENSITIVE_IDENTIFIERS
 
     def replace_identifier(match):
         word = match.group(0)
-        return word if word in preserve else '_'
+        return word if word in preserve else "_"
 
-    code = re.sub(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', replace_identifier, code)
+    code = re.sub(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b", replace_identifier, code)
 
     # Now replace string literals (contents are already identifier-replaced if needed)
     code = re.sub(r'"[^"]*"', '"S"', code)
     code = re.sub(r"'[^']*'", '"S"', code)
 
     # Replace numbers
-    code = re.sub(r'\b\d+\.?\d*\b', 'N', code)
+    code = re.sub(r"\b\d+\.?\d*\b", "N", code)
 
     # Compact whitespace
-    code = re.sub(r'\s+', ' ', code)
+    code = re.sub(r"\s+", " ", code)
 
     return code.strip()
 
@@ -882,6 +982,7 @@ def normalize_code(code: str, language: str = "python") -> str:
 # =============================================================================
 # Ollama Embeddings
 # =============================================================================
+
 
 async def _get_embedding(text: str) -> Optional[list[float]]:
     """Get embedding vector from Ollama."""
@@ -921,6 +1022,7 @@ def _hash_structure(normalized: str) -> str:
 # =============================================================================
 # Firewall Logic
 # =============================================================================
+
 
 async def _check_against_blacklist(
     normalized: str,
@@ -965,7 +1067,7 @@ async def _check_against_blacklist(
     # Convert L2 distance to similarity score (approximate)
     # This is a rough approximation; for normalized vectors, similarity ≈ 1 - distance²/2
     best_distance = distances[0]
-    similarity = max(0.0, 1.0 - (best_distance ** 2) / 2)
+    similarity = max(0.0, 1.0 - (best_distance**2) / 2)
 
     matched_id = ids[0]
     matched_reason = metadatas[0].get("reason", "Unknown") if metadatas else "Unknown"
@@ -1106,11 +1208,11 @@ async def firewall_ollama_status(force_refresh: bool = False) -> dict:
     if status["running"] and status.get("embedding_model_available"):
         status["recommendation"] = "Ollama is ready! Embeddings will use local inference."
     elif status["running"] and not status.get("embedding_model_available"):
-        status["recommendation"] = f"Ollama is running but {EMBEDDING_MODEL} not found. Run: ollama pull {EMBEDDING_MODEL}"
-    else:
         status["recommendation"] = (
-            f"Ollama not available. Run: ollama serve && ollama pull {EMBEDDING_MODEL}"
+            f"Ollama is running but {EMBEDDING_MODEL} not found. Run: ollama pull {EMBEDDING_MODEL}"
         )
+    else:
+        status["recommendation"] = f"Ollama not available. Run: ollama serve && ollama pull {EMBEDDING_MODEL}"
 
     return status
 
@@ -1118,6 +1220,7 @@ async def firewall_ollama_status(force_refresh: bool = False) -> dict:
 # =============================================================================
 # MCP Tools - Firewall
 # =============================================================================
+
 
 @mcp.tool()
 async def firewall_check(file_path: str) -> dict:
@@ -1278,12 +1381,14 @@ async def firewall_blacklist(
     collection.add(
         ids=[structure_hash],
         embeddings=[embedding],
-        metadatas=[{
-            "reason": reason,
-            "severity": severity,
-            "language": language,
-            "normalized_preview": normalized[:200],
-        }],
+        metadatas=[
+            {
+                "reason": reason,
+                "severity": severity,
+                "language": language,
+                "normalized_preview": normalized[:200],
+            }
+        ],
         documents=[normalized],
     )
 
@@ -1345,12 +1450,14 @@ async def firewall_record_delta(
     collection.add(
         ids=[delta_id],
         embeddings=[embedding],
-        metadatas=[{
-            "similar_to": similar_to,
-            "notes": notes,
-            "language": language,
-            "structure_hash": structure_hash,
-        }],
+        metadatas=[
+            {
+                "similar_to": similar_to,
+                "notes": notes,
+                "language": language,
+                "structure_hash": structure_hash,
+            }
+        ],
         documents=[normalized],
     )
 
@@ -1392,13 +1499,15 @@ async def firewall_list_patterns(
     patterns = []
     for i, id_ in enumerate(results["ids"]):
         meta = results["metadatas"][i] if results["metadatas"] else {}
-        patterns.append({
-            "id": id_,
-            "reason": meta.get("reason", ""),
-            "severity": meta.get("severity", ""),
-            "language": meta.get("language", ""),
-            "preview": meta.get("normalized_preview", "")[:100],
-        })
+        patterns.append(
+            {
+                "id": id_,
+                "reason": meta.get("reason", ""),
+                "severity": meta.get("severity", ""),
+                "language": meta.get("language", ""),
+                "preview": meta.get("normalized_preview", "")[:100],
+            }
+        )
 
     return {
         "collection": collection_name,
@@ -1471,10 +1580,12 @@ async def firewall_status() -> dict:
     if HAS_HTTPX:
         try:
             import asyncio
+
             async def check():
                 async with httpx.AsyncClient(timeout=5.0) as client:
                     response = await client.get(f"{OLLAMA_URL}/api/tags")
                     return response.status_code == 200
+
             ollama_available = asyncio.get_event_loop().run_until_complete(check())
         except Exception:
             pass
@@ -1496,6 +1607,7 @@ async def firewall_status() -> dict:
 # =============================================================================
 # Entry Point
 # =============================================================================
+
 
 def main():
     """Run the MCP server."""
