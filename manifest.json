@@ -1,13 +1,12 @@
 {
-  "manifest_version": "0.1",
+  "manifest_version": "0.4",
   "name": "code-firewall-mcp",
   "display_name": "Code Firewall MCP",
   "version": "0.1.0",
   "description": "Structural similarity-based code security filter. Blocks dangerous code patterns before they reach execution tools by comparing code structure against a blacklist of known-bad patterns using tree-sitter, Ollama embeddings, and ChromaDB.",
   "author": {
     "name": "Erik Goughnour",
-    "email": "e.goughnour@gmail.com",
-    "url": "https://github.com/egoughnour"
+    "email": "e.goughnour@gmail.com"
   },
   "repository": {
     "type": "git",
@@ -30,38 +29,48 @@
       }
     }
   },
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "linux",
+      "win32"
+    ],
+    "runtimes": {
+      "python": ">=3.10,<3.14"
+    }
+  },
   "user_config": {
     "firewall_data_dir": {
-      "type": "string",
-      "label": "Data Directory",
+      "type": "directory",
+      "title": "Data Directory",
       "description": "Directory for storing ChromaDB data and pattern collections",
       "default": "/tmp/code-firewall",
       "required": false
     },
     "ollama_url": {
       "type": "string",
-      "label": "Ollama URL",
+      "title": "Ollama URL",
       "description": "URL of the Ollama server for embeddings",
       "default": "http://localhost:11434",
       "required": false
     },
     "embedding_model": {
       "type": "string",
-      "label": "Embedding Model",
+      "title": "Embedding Model",
       "description": "Ollama model to use for embeddings (must support embed endpoint)",
       "default": "nomic-embed-text",
       "required": false
     },
     "similarity_threshold": {
       "type": "string",
-      "label": "Block Threshold",
+      "title": "Block Threshold",
       "description": "Similarity threshold (0-1) above which code is blocked",
       "default": "0.85",
       "required": false
     },
     "near_miss_threshold": {
       "type": "string",
-      "label": "Near-miss Threshold",
+      "title": "Near-miss Threshold",
       "description": "Similarity threshold (0-1) for recording near-misses",
       "default": "0.70",
       "required": false
@@ -97,12 +106,7 @@
       "description": "Get firewall status and statistics"
     }
   ],
-  "categories": [
-    "security",
-    "code-analysis",
-    "developer-tools"
-  ],
-  "tags": [
+  "keywords": [
     "security",
     "firewall",
     "code-analysis",
