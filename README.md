@@ -14,16 +14,18 @@ A structural similarity-based code security filter for MCP (Model Context Protoc
 
 ## How It Works
 
-```
-┌──────────┐    ┌─────────────┐    ┌───────────────────┐    ┌─────────────────────┐
-│ Code     │───▶│ CST → Embed │───▶│ Similarity Check  │───▶│ Execution Tools     │
-│ (file)   │    │ (tree-sitter│    │ vs blacklist      │    │ (rlm_exec, etc.)    │
-└──────────┘    │  + Ollama)  │    │ (ChromaDB)        │    └─────────────────────┘
-                └─────────────┘    └─────────┬─────────┘
-                                             │
-                                    ┌────────┴────────┐
-                                    ▼                 ▼
-                               [BLOCKED]         [ALLOWED]
+```mermaid
+flowchart LR
+    A[Code<br/>file/string] --> B[Parse & Normalize<br/>tree-sitter]
+    B --> C[Embed<br/>Ollama]
+    C --> D{Similarity Check<br/>vs Blacklist}
+    D -->|≥ threshold| E[🚫 BLOCKED]
+    D -->|< threshold| F[✅ ALLOWED]
+    F --> G[Execution Tools<br/>rlm_exec, etc.]
+
+    style E fill:#ff6b6b,color:#fff
+    style F fill:#51cf66,color:#fff
+    style D fill:#339af0,color:#fff
 ```
 
 1. **Parse** code to Concrete Syntax Tree (CST) using tree-sitter
@@ -271,6 +273,30 @@ await firewall_blacklist(
 ```
 
 ## Structural Normalization
+
+```mermaid
+flowchart TD
+    subgraph Input
+        A1["os.system('rm -rf /')"]
+        A2["os.system('ls -la')"]
+        A3["os.system(user_cmd)"]
+    end
+
+    subgraph Normalization
+        B[Strip literals & identifiers<br/>Preserve security keywords]
+    end
+
+    subgraph Output
+        C["os.system('S')"]
+    end
+
+    A1 --> B
+    A2 --> B
+    A3 --> B
+    B --> C
+
+    style C fill:#ff922b,color:#fff
+```
 
 The normalizer strips:
 - **Identifiers**: `my_var` → `_` (except security-sensitive ones)
