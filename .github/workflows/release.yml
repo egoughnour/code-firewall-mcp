@@ -1,0 +1,336 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 0.1.0)'
+        required: true
+        type: string
+      dry_run:
+        description: 'Dry run (build but do not publish)'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install and test
+        run: |
+          uv pip install --system -e ".[dev]"
+          pytest tests/ -x -q
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      mcpb_sha256: ${{ steps.verify.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install build tools
+        run: |
+          pip install build
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update versions in all files
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Update pyproject.toml version
+          sed -i "s/^version = .*/version = \"$VERSION\"/" pyproject.toml
+
+          # Update server.json version
+          jq --arg v "$VERSION" '.version = $v | .packages[0].version = $v' server.json > server.tmp.json
+          mv server.tmp.json server.json
+
+          # Update manifest.json version
+          jq --arg v "$VERSION" '.version = $v' manifest.json > manifest.tmp.json
+          mv manifest.tmp.json manifest.json
+
+          echo "Updated versions to $VERSION"
+          grep "^version" pyproject.toml
+          jq '.version, .packages[].registryType' server.json
+          jq '.version' manifest.json
+
+      - name: Build Python package
+        run: |
+          python -m build
+          ls -la dist/
+
+      - name: Upload Python package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-package
+          path: dist/
+          retention-days: 90
+
+      - name: Update manifest for PyPI source
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          jq --arg v "$VERSION" '
+            .server.mcp_config.args = ["code-firewall-mcp"]
+          ' manifest.json > manifest.tmp.json
+          mv manifest.tmp.json manifest.json
+          echo "Updated manifest.json for PyPI:"
+          cat manifest.json | jq '.server.mcp_config'
+
+      - name: Pack MCPB bundle
+        id: pack
+        run: |
+          npx @anthropic-ai/mcpb pack
+          MCPB_FILE=$(ls *.mcpb 2>/dev/null | head -1)
+          if [ "$MCPB_FILE" != "code-firewall-mcp.mcpb" ]; then
+            mv "$MCPB_FILE" "code-firewall-mcp.mcpb"
+            echo "Created: code-firewall-mcp.mcpb (renamed from $MCPB_FILE)"
+          else
+            echo "Created: code-firewall-mcp.mcpb"
+          fi
+          echo "filename=code-firewall-mcp.mcpb" >> $GITHUB_OUTPUT
+
+      - name: Verify MCPB bundle
+        id: verify
+        run: |
+          MCPB_FILE="code-firewall-mcp.mcpb"
+          if [ -f "$MCPB_FILE" ]; then
+            echo "=== Bundle contents ==="
+            unzip -l "$MCPB_FILE"
+
+            echo "=== Manifest validation ==="
+            MANIFEST=$(unzip -p "$MCPB_FILE" manifest.json)
+            echo "$MANIFEST" | jq .
+
+            NAME=$(echo "$MANIFEST" | jq -r '.name // empty')
+            VERSION=$(echo "$MANIFEST" | jq -r '.version // empty')
+            MCP_CONFIG=$(echo "$MANIFEST" | jq -r '.server.mcp_config // empty')
+
+            if [ -z "$NAME" ] || [ -z "$VERSION" ] || [ -z "$MCP_CONFIG" ]; then
+              echo "ERROR: Manifest missing required fields"
+              exit 1
+            fi
+            echo "✅ Manifest valid: $NAME v$VERSION"
+
+            SHA256=$(sha256sum "$MCPB_FILE" | cut -d' ' -f1)
+            echo "sha256=$SHA256" >> $GITHUB_OUTPUT
+            echo "SHA256: $SHA256"
+          else
+            echo "ERROR: No .mcpb file created"
+            exit 1
+          fi
+
+      - name: Upload MCPB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcpb-bundle
+          path: "*.mcpb"
+          retention-days: 90
+
+  publish-pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.dry_run == false)
+    permissions:
+      id-token: write
+    environment:
+      name: pypi
+      url: https://pypi.org/project/code-firewall-mcp/
+    steps:
+      - name: Download Python package artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  release:
+    needs: [build, publish-pypi]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Python package artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package
+          path: dist/
+
+      - name: Download MCPB artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: mcpb-bundle
+          path: mcpb/
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+            echo "tag=v${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "Code Firewall MCP v${{ steps.version.outputs.version }}"
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+          files: |
+            dist/*
+            mcpb/*.mcpb
+          body: |
+            ## Code Firewall MCP v${{ steps.version.outputs.version }}
+
+            Structural similarity-based code security filter for MCP tools.
+
+            ### Installation Options
+
+            #### Option 1: Claude Desktop (One-Click Install)
+
+            Download `code-firewall-mcp.mcpb` and double-click to install.
+
+            #### Option 2: Via uvx (Claude Code, CLI)
+
+            ```bash
+            uvx code-firewall-mcp
+            ```
+
+            #### Option 3: Via pip
+
+            ```bash
+            pip install code-firewall-mcp
+            ```
+
+            ### Requirements
+
+            - Ollama (for embeddings): `ollama pull nomic-embed-text`
+            - ChromaDB (bundled, no setup needed)
+            - tree-sitter (optional, for better parsing)
+
+            ### Changes
+
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
+
+  publish-registry:
+    needs: [build, release, publish-pypi]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+            echo "tag=v${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Wait for PyPI propagation
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          echo "Waiting for PyPI to propagate version $VERSION..."
+          for i in {1..12}; do
+            PYPI_VERSION=$(curl -s "https://pypi.org/pypi/code-firewall-mcp/json" | jq -r '.info.version // empty')
+            if [ "$PYPI_VERSION" = "$VERSION" ]; then
+              echo "✅ PyPI has version $VERSION"
+              exit 0
+            fi
+            echo "Attempt $i/12: PyPI shows version '$PYPI_VERSION', waiting 10s..."
+            sleep 10
+          done
+          echo "⚠️ PyPI propagation timeout, proceeding anyway"
+
+      - name: Update server.json for registry
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="${{ steps.version.outputs.tag }}"
+          SHA256="${{ needs.build.outputs.mcpb_sha256 }}"
+          REPO="${{ github.repository }}"
+
+          jq --arg v "$VERSION" \
+             --arg tag "$TAG" \
+             --arg sha "$SHA256" \
+             --arg repo "$REPO" '
+            .version = $v |
+            .packages[0].version = $v |
+            .packages[1].identifier = "https://github.com/\($repo)/releases/download/\($tag)/code-firewall-mcp.mcpb" |
+            .packages[1].fileSha256 = $sha
+          ' server.json > server.tmp.json
+          mv server.tmp.json server.json
+          echo "Updated server.json:"
+          cat server.json | jq '.'
+
+      - name: Install mcp-publisher
+        run: |
+          LATEST_URL=$(curl -s https://api.github.com/repos/modelcontextprotocol/registry/releases/latest | jq -r '.assets[] | select(.name | test("^mcp-publisher.*linux_amd64\\.tar\\.gz$")) | .browser_download_url')
+          if [ -n "$LATEST_URL" ] && [ "$LATEST_URL" != "null" ]; then
+            echo "Downloading mcp-publisher from: $LATEST_URL"
+            curl -fsSL "$LATEST_URL" -o mcp-publisher.tar.gz
+            tar xzf mcp-publisher.tar.gz
+            chmod +x mcp-publisher
+            sudo mv mcp-publisher /usr/local/bin/
+          else
+            echo "Trying fallback v1.4.0..."
+            curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/v1.4.0/mcp-publisher_1.4.0_linux_amd64.tar.gz" -o mcp-publisher.tar.gz
+            tar xzf mcp-publisher.tar.gz
+            chmod +x mcp-publisher
+            sudo mv mcp-publisher /usr/local/bin/
+          fi
+          mcp-publisher --version || echo "mcp-publisher installed"
+
+      - name: Authenticate with GitHub OIDC
+        run: |
+          mcp-publisher login github-oidc
+
+      - name: Publish to MCP Registry
+        run: |
+          echo "=== Publishing to MCP Registry ==="
+          mcp-publisher publish
+          echo "✅ Published to MCP Registry"
