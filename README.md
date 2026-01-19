@@ -2,6 +2,14 @@
 
 <!-- mcp-name: io.github.egoughnour/code-firewall-mcp -->
 
+[![PyPI](https://img.shields.io/pypi/v/code-firewall-mcp?style=flat-square&logo=pypi&logoColor=white)](https://pypi.org/project/code-firewall-mcp/)
+[![MCP Registry](https://img.shields.io/badge/MCP-Registry-blue?style=flat-square&logo=anthropic&logoColor=white)](https://registry.mcp.so/servers/io.github.egoughnour/code-firewall-mcp)
+[![Claude Desktop](https://img.shields.io/badge/Claude-Desktop-orange?style=flat-square&logo=anthropic&logoColor=white)](https://github.com/egoughnour/code-firewall-mcp/releases/latest/download/code-firewall-mcp.mcpb)
+[![Tests](https://img.shields.io/github/actions/workflow/status/egoughnour/code-firewall-mcp/test.yml?style=flat-square&logo=github-actions&label=Tests)](https://github.com/egoughnour/code-firewall-mcp/actions/workflows/test.yml)
+[![Release](https://img.shields.io/github/actions/workflow/status/egoughnour/code-firewall-mcp/release.yml?style=flat-square&logo=github-actions&label=Release)](https://github.com/egoughnour/code-firewall-mcp/actions/workflows/release.yml)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](https://opensource.org/licenses/MIT)
+
 A structural similarity-based code security filter for MCP (Model Context Protocol). Blocks dangerous code patterns before they reach execution tools by comparing code structure against a blacklist of known-bad patterns.
 
 ## How It Works
@@ -28,29 +36,133 @@ A structural similarity-based code security filter for MCP (Model Context Protoc
 
 Code patterns like `os.system("rm -rf /")` and `os.system("ls")` have **identical structure**. By normalizing away the specific commands/identifiers, we can detect dangerous patterns regardless of the specific arguments used.
 
+**Security-sensitive identifiers are preserved** during normalization (e.g., `eval`, `exec`, `os`, `system`, `subprocess`, `Popen`, `shell`) to ensure embeddings remain discriminative for dangerous patterns.
+
 ## Installation
 
-```bash
-# Via uvx (recommended)
-uvx code-firewall-mcp
+### Quick Start
 
-# Or install from source
-pip install -e .
+**Option 1: PyPI (Recommended)**
+
+```bash
+uvx code-firewall-mcp
+# or
+pip install code-firewall-mcp
+```
+
+**Option 2: Claude Desktop One-Click**
+
+Download the `.mcpb` from [Releases](https://github.com/egoughnour/code-firewall-mcp/releases) and double-click to install.
+
+**Option 3: From Source**
+
+```bash
+git clone https://github.com/egoughnour/code-firewall-mcp.git
+cd code-firewall-mcp
+uv sync
+```
+
+### Wire to Claude Code / Claude Desktop
+
+Add to `~/.claude/.mcp.json` (Claude Code) or `claude_desktop_config.json` (Claude Desktop):
+
+```json
+{
+  "mcpServers": {
+    "code-firewall": {
+      "command": "uvx",
+      "args": ["code-firewall-mcp"],
+      "env": {
+        "FIREWALL_DATA_DIR": "~/.code-firewall",
+        "OLLAMA_URL": "http://localhost:11434"
+      }
+    }
+  }
+}
 ```
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.10+ (< 3.14 due to onnxruntime compatibility)
 - Ollama (for embeddings)
 - ChromaDB (for vector storage)
 - tree-sitter (optional, for better parsing)
 
-Pull an embedding model:
+## Setting Up Ollama (Embeddings)
+
+Code Firewall can automatically install and configure Ollama on macOS with Apple Silicon. There are **two installation methods**:
+
+### Method 1: Homebrew Installation
+
+```python
+# 1. Check system requirements
+firewall_system_check()
+
+# 2. Install via Homebrew
+firewall_setup_ollama(install=True, start_service=True, pull_model=True)
+```
+
+**What this does:**
+- Installs Ollama via Homebrew (`brew install ollama`)
+- Starts Ollama as a managed background service
+- Pulls nomic-embed-text model for embeddings
+
+### Method 2: Direct Download (No Sudo)
+
+```python
+# 1. Check system
+firewall_system_check()
+
+# 2. Install via direct download - no sudo, no Homebrew
+firewall_setup_ollama_direct(install=True, start_service=True, pull_model=True)
+```
+
+**What this does:**
+- Downloads Ollama from https://ollama.com
+- Extracts to `~/Applications/` (no admin needed)
+- Starts Ollama via `ollama serve`
+- Pulls nomic-embed-text model
+
+### Manual Setup
+
 ```bash
+# Install Ollama
+brew install ollama
+# or download from https://ollama.ai
+
+# Start service
+brew services start ollama
+# or: ollama serve
+
+# Pull embedding model
 ollama pull nomic-embed-text
+
+# Verify
+firewall_ollama_status()
 ```
 
 ## Tools
+
+### Setup & Status Tools
+
+| Tool | Purpose |
+|------|---------|
+| `firewall_system_check` | **Check system requirements** — verify macOS, Apple Silicon, RAM |
+| `firewall_setup_ollama` | **Install via Homebrew** — managed service, auto-updates |
+| `firewall_setup_ollama_direct` | **Install via direct download** — no sudo, fully headless |
+| `firewall_ollama_status` | **Check Ollama availability** — verify embeddings are ready |
+
+### Firewall Tools
+
+| Tool | Purpose |
+|------|---------|
+| `firewall_check` | Check if a code file is safe to execute |
+| `firewall_check_code` | Check code string directly (no file required) |
+| `firewall_blacklist` | Add a dangerous pattern to the blacklist |
+| `firewall_record_delta` | Record near-miss variants for classifier sharpening |
+| `firewall_list_patterns` | List patterns in blacklist or delta collection |
+| `firewall_remove_pattern` | Remove a pattern from blacklist or deltas |
+| `firewall_status` | Get firewall status and statistics |
 
 ### `firewall_check`
 Check if a code file is safe to pass to execution tools.
@@ -131,6 +243,16 @@ if check["blocked"]:
 result = await rlm_exec(code=user_code, context_name="my-context")
 ```
 
+### Integrated with massive-context-mcp
+
+Install massive-context-mcp with firewall integration:
+
+```bash
+pip install massive-context-mcp[firewall]
+```
+
+When enabled, `rlm_exec` automatically checks code against the firewall before execution.
+
 ### Building the Blacklist
 
 The blacklist grows through use:
@@ -151,18 +273,25 @@ await firewall_blacklist(
 ## Structural Normalization
 
 The normalizer strips:
-- **Identifiers**: `my_var` → `_`
+- **Identifiers**: `my_var` → `_` (except security-sensitive ones)
 - **String literals**: `"hello"` → `"S"`
 - **Numbers**: `42` → `N`
 - **Comments**: Removed entirely
+
+**Preserved identifiers** (for better pattern matching):
+- `eval`, `exec`, `compile`, `__import__`
+- `os`, `system`, `popen`, `subprocess`, `Popen`, `shell`
+- `open`, `read`, `write`, `socket`, `connect`
+- `getattr`, `setattr`, `__globals__`, `__builtins__`
+- And more security-sensitive names...
 
 Example:
 ```python
 # Original
 subprocess.run(["curl", url, "-o", output_file])
 
-# Normalized
-_._(["S", _, "S", _])
+# Normalized (preserves 'subprocess' and 'run')
+subprocess.run(["S", _, "S", _])
 ```
 
 Both `subprocess.run(["curl", ...])` and `subprocess.run(["wget", ...])` normalize to the same structure, so blacklisting one catches both.
